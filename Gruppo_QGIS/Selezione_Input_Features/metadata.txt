@@ -1,0 +1,9 @@
+[general]
+name=RicercaCategoria
+description=Plugin per selezionare poligoni da PARTICELLE_dissolve_pat_CATASTO_FABBRICATI per CATEGORIA e mostrare popup
+version=1.2
+qgisMinimumVersion=3.10
+author=Supporto Tecnico
+email=franco.chiste@provincia.tn.it
+icon=icon.png
+category=Analysis
