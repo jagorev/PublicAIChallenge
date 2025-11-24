@@ -55,4 +55,16 @@ def apartments_from_xml(xml_path):
         print(f"Errore parsing {xml_path}: {e}")
 
 
-    return pd.DataFrame(all_rows)
+    df_xml=pd.DataFrame(all_rows)
+
+    int_cols = ['comuneCatastale', 'foglio', 'numeratore', 'subalterno']
+
+    for col in int_cols:
+        if col in df_xml.columns:
+            df_xml[col] = (
+                df_xml[col]
+                .astype(str)
+                .str.extract(r"(\d+)", expand=False)  # keep only digits
+                .astype(float)                        # allow NaN
+                )
+    return df_xml
