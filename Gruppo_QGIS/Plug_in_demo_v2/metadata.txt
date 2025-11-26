@@ -1,0 +1,18 @@
+[general]
+name=XML Prediction Plugin
+qgisMinimumVersion=3.0
+description=Plugin demo per la predizione di classi tramite file XML
+version=1.0
+author=jagorev
+email=
+
+about=Plugin demo che permette di caricare un file XML per effettuare predizioni di classi confrontando con i layer QGIS aperti
+
+tracker=
+repository=
+hasProcessingProvider=no
+tags=prediction,xml,demo
+category=Plugins
+icon=icon.png
+experimental=False
+deprecated=False
