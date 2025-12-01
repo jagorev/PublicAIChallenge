@@ -783,7 +783,7 @@ def group_rare_classes_by_category(df_model, label_encoders, min_samples=20, tar
     class_to_category = {}
     for num_class in all_classes:
         try:
-            original_cat = le_categoria.inverse_transform([num_class])[0]
+            original_cat = le_categoria.inverse_transform([int(num_class)])[0]
             class_to_category[num_class] = original_cat
         except:
             continue
@@ -855,7 +855,7 @@ def group_rare_classes_by_category(df_model, label_encoders, min_samples=20, tar
                 for rare_class in rare_by_category[cat]:
                     count_in_df = (df_grouped[target_column] == rare_class).sum()
                     try:
-                        cat_name = le_categoria.inverse_transform([rare_class])[0]
+                        cat_name = le_categoria.inverse_transform([int(rare_class)])[0]
                         print(f"      Classe {rare_class} ({cat_name}): {count_in_df} campioni nel dataframe")
                     except:
                         print(f"      Classe {rare_class}: {count_in_df} campioni nel dataframe")
@@ -942,7 +942,7 @@ def is_altro_category(categoria_encoded, label_encoder):
     Returns True if categoria is "A", "B", or "C" (these are the grouped rare categories).
     """
     try:
-        categoria_name = label_encoder.inverse_transform([categoria_encoded])[0]
+        categoria_name = label_encoder.inverse_transform([int(categoria_encoded)])[0]
         return categoria_name in ['A', 'B', 'C']
     except:
         return False
@@ -1151,7 +1151,7 @@ def main():
     le_cat_check = label_encoders["CATEGORIA"]
     for idx, count in zip(counts_after.index, counts_after.values):
         try:
-            cat_name = le_cat_check.inverse_transform([idx])[0]
+            cat_name = le_cat_check.inverse_transform([int(idx)])[0]
             print(f"   {cat_name}: {count} campioni")
         except:
             print(f"   Classe {idx}: {count} campioni")
@@ -1169,7 +1169,7 @@ def main():
     le_cat_check = label_encoders["CATEGORIA"]
     for idx, count in zip(counts_final_cat.index, counts_final_cat.values):
         try:
-            cat_name = le_cat_check.inverse_transform([idx])[0]
+            cat_name = le_cat_check.inverse_transform([int(idx)])[0]
             print(f"   {cat_name}: {count} campioni")
         except:
             print(f"   Classe {idx}: {count} campioni")
@@ -1472,16 +1472,16 @@ def main():
     # Check distribution of categories in test set (including altro_X)
     print(f"\n📊 Distribuzione categorie nel test set:")
     test_cat_counts = pd.Series(y_test_cat).value_counts().sort_index()
-    test_cat_names = [le_categoria.inverse_transform([idx])[0] for idx in test_cat_counts.index]
+    test_cat_names = [le_categoria.inverse_transform([int(idx)])[0] for idx in test_cat_counts.index]
     for idx, count in zip(test_cat_counts.index, test_cat_counts.values):
-        cat_name = le_categoria.inverse_transform([idx])[0]
+        cat_name = le_categoria.inverse_transform([int(idx)])[0]
         print(f"   {cat_name}: {count} campioni")
     
     # Check predicted categories
     print(f"\n📊 Distribuzione categorie predette nel test set:")
     pred_cat_counts = pd.Series(y_test_pred_categoria).value_counts().sort_index()
     for idx, count in zip(pred_cat_counts.index, pred_cat_counts.values):
-        cat_name = le_categoria.inverse_transform([idx])[0]
+        cat_name = le_categoria.inverse_transform([int(idx)])[0]
         print(f"   {cat_name}: {count} campioni")
     
     # Step 2: Add predicted CATEGORIA as feature and predict CLASSE
