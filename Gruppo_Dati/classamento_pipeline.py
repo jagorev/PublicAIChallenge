@@ -1159,19 +1159,33 @@ def main():
     # Step 5: Filter classes with <2 samples (needed for stratify) and split data
     print("\n[5/7] Filtering classes with <2 samples and splitting data...")
     
-    counts_before_split = df_model["CATEGORIA"].value_counts()
-    categorie_valid = counts_before_split[counts_before_split > 1].index
-    df_filtered = df_model[df_model["CATEGORIA"].isin(categorie_valid)].reset_index(drop=True)
+    # Filter CATEGORIA with <2 samples
+    counts_before_split_cat = df_model["CATEGORIA"].value_counts()
+    categorie_valid = counts_before_split_cat[counts_before_split_cat > 1].index
+    df_filtered_cat = df_model[df_model["CATEGORIA"].isin(categorie_valid)].reset_index(drop=True)
     
-    print(f"\n📊 Dopo filtro (<2 campioni):")
-    counts_final = df_filtered["CATEGORIA"].value_counts().sort_index()
+    print(f"\n📊 Dopo filtro CATEGORIA (<2 campioni):")
+    counts_final_cat = df_filtered_cat["CATEGORIA"].value_counts().sort_index()
     le_cat_check = label_encoders["CATEGORIA"]
-    for idx, count in zip(counts_final.index, counts_final.values):
+    for idx, count in zip(counts_final_cat.index, counts_final_cat.values):
         try:
             cat_name = le_cat_check.inverse_transform([idx])[0]
             print(f"   {cat_name}: {count} campioni")
         except:
             print(f"   Classe {idx}: {count} campioni")
+    
+    # Filter CLASSE with <2 samples (to avoid classes that end up only in test)
+    print(f"\n📊 Filtering CLASSE with <2 samples...")
+    counts_before_split_classe = df_filtered_cat["CLASSE"].value_counts()
+    classi_valid = counts_before_split_classe[counts_before_split_classe > 1].index
+    df_filtered = df_filtered_cat[df_filtered_cat["CLASSE"].isin(classi_valid)].reset_index(drop=True)
+    
+    n_removed_classe = len(df_filtered_cat) - len(df_filtered)
+    if n_removed_classe > 0:
+        print(f"   ⚠️  Removed {n_removed_classe} samples with CLASSE having <2 samples")
+        print(f"   Removed CLASSE classes: {sorted(set(counts_before_split_classe[counts_before_split_classe == 1].index))}")
+    else:
+        print(f"   ✅ No CLASSE classes with <2 samples found")
     
     df_train_final, df_test = train_test_split(
         df_filtered,
@@ -1239,46 +1253,10 @@ def main():
     print(f"   - Augmented samples: {n_augmented_cat} ({n_augmented_cat/len(X_train_cat_aug)*100:.1f}%)")
     
     # Train model with augmentation
-    model_categoria_aug, class_weight_dict_categoria_aug = train_model(
+    model_categoria, _ = train_model(
         X_train_cat_aug, y_train_cat_aug, 
-        model_name="Model CATEGORIA (With Augmentation)"
+        model_name="Model CATEGORIA"
     )
-    
-    # Train model without augmentation (for comparison)
-    print("\n🔍 Training CATEGORIA model WITHOUT augmentation (for comparison)...")
-    model_categoria_no_aug, class_weight_dict_categoria_no_aug = train_model(
-        X_train_cat, y_train_cat,
-        model_name="Model CATEGORIA (No Augmentation)"
-    )
-    
-    # Compare models on test set
-    print("\n" + "="*70)
-    print("COMPARISON: CATEGORIA Model (With vs Without Augmentation)")
-    print("="*70)
-    
-    # Test with augmentation
-    y_pred_aug = model_categoria_aug.predict(X_test_cat)
-    acc_aug = accuracy_score(y_test_cat, y_pred_aug)
-    report_aug = classification_report(y_test_cat, y_pred_aug, zero_division=0, output_dict=True)
-    f1_aug = report_aug['macro avg']['f1-score']
-    
-    # Test without augmentation
-    y_pred_no_aug = model_categoria_no_aug.predict(X_test_cat)
-    acc_no_aug = accuracy_score(y_test_cat, y_pred_no_aug)
-    report_no_aug = classification_report(y_test_cat, y_pred_no_aug, zero_division=0, output_dict=True)
-    f1_no_aug = report_no_aug['macro avg']['f1-score']
-    
-    # Show comparison
-    print(f"\n📊 Results Comparison:")
-    print(f"   With Augmentation:    Accuracy={acc_aug:.4f}  F1-macro={f1_aug:.4f}")
-    print(f"   Without Augmentation: Accuracy={acc_no_aug:.4f}  F1-macro={f1_no_aug:.4f}")
-    print(f"\n   Gain:")
-    print(f"      Accuracy: +{(acc_aug - acc_no_aug)*100:.2f}% ({(acc_aug/acc_no_aug - 1)*100:.2f}% relative)")
-    print(f"      F1-macro:  +{f1_aug - f1_no_aug:.4f} ({(f1_aug/f1_no_aug - 1)*100:.2f}% relative)")
-    
-    # Use augmented model for pipeline
-    model_categoria = model_categoria_aug
-    class_weight_dict_categoria = class_weight_dict_categoria_aug
 
     # ========================================================================
     # MODEL 2: Train CLASSE prediction (using CATEGORIA as feature)
@@ -1391,8 +1369,8 @@ def main():
     print(f"   - Original samples: {n_original_classe}")
     print(f"   - Augmented samples: {n_augmented_classe} ({n_augmented_classe/len(X_train_classe_aug)*100:.1f}%)")
     
-    # Train CLASSE model with augmentation using best parameters from grid search
-    print("\n🔍 Training CLASSE model (with augmentation) using best parameters...")
+    # Train CLASSE model with augmentation using best parameters
+    print("\n🔍 Training CLASSE model using best parameters...")
     print("   Best parameters: n_estimators=200, max_depth=60, min_samples_split=10, min_samples_leaf=1, max_features='log2'")
     
     # Calculate class weights
@@ -1418,7 +1396,7 @@ def main():
         X_train_classe_aug_clean = X_train_classe_aug_clean.drop(columns=['is_augmented'])
     
     # Train with best parameters for CLASSE
-    model_classe_aug = RandomForestClassifier(
+    model_classe = RandomForestClassifier(
         n_estimators=200,
         max_depth=60,
         min_samples_split=10,
@@ -1429,78 +1407,8 @@ def main():
         random_state=42
     )
     
-    model_classe_aug.fit(X_train_classe_aug_clean, y_train_classe_aug)
+    model_classe.fit(X_train_classe_aug_clean, y_train_classe_aug)
     print(f"✅ Model trained successfully")
-    
-    # Train CLASSE model without augmentation using best parameters from grid search
-    print("\n🔍 Training CLASSE model (without augmentation) using best parameters...")
-    print("   Best parameters: n_estimators=200, max_depth=60, min_samples_split=10, min_samples_leaf=1, max_features='log2'")
-    
-    # Calculate class weights
-    classes_no_aug = np.unique(y_train_classe)
-    class_weights_balanced_no_aug = compute_class_weight('balanced', classes=classes_no_aug, y=y_train_classe)
-    class_weight_dict_no_aug = {int(cls): float(w) for cls, w in zip(classes_no_aug, class_weights_balanced_no_aug)}
-    
-    class_counts_train_no_aug = pd.Series(y_train_classe).value_counts()
-    rare_classes_no_aug = class_counts_train_no_aug[class_counts_train_no_aug < 100].index.tolist()
-    very_rare_classes_no_aug = class_counts_train_no_aug[class_counts_train_no_aug < 20].index.tolist()
-    
-    for cls in rare_classes_no_aug:
-        if cls in class_weight_dict_no_aug:
-            original_weight = class_weight_dict_no_aug[cls]
-            if cls in very_rare_classes_no_aug:
-                class_weight_dict_no_aug[cls] = original_weight * 20.0
-            else:
-                class_weight_dict_no_aug[cls] = original_weight * 10.0
-    
-    # Remove is_augmented column if present
-    X_train_classe_clean = X_train_classe.copy()
-    if 'is_augmented' in X_train_classe_clean.columns:
-        X_train_classe_clean = X_train_classe_clean.drop(columns=['is_augmented'])
-    
-    # Train with best parameters for CLASSE
-    model_classe_no_aug = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=60,
-        min_samples_split=10,
-        min_samples_leaf=1,
-        max_features='log2',
-        class_weight=class_weight_dict_no_aug,
-        n_jobs=-1,
-        random_state=42
-    )
-    
-    model_classe_no_aug.fit(X_train_classe_clean, y_train_classe)
-    print(f"✅ Model trained successfully")
-    
-    # Compare models on test set
-    print("\n" + "="*70)
-    print("COMPARISON: CLASSE Model (With vs Without Augmentation)")
-    print("="*70)
-    
-    # Test with augmentation
-    y_pred_classe_aug = model_classe_aug.predict(X_test_classe)
-    acc_classe_aug = accuracy_score(y_test_classe, y_pred_classe_aug)
-    report_classe_aug = classification_report(y_test_classe, y_pred_classe_aug, zero_division=0, output_dict=True)
-    f1_classe_aug = report_classe_aug['macro avg']['f1-score']
-    
-    # Test without augmentation
-    y_pred_classe_no_aug = model_classe_no_aug.predict(X_test_classe)
-    acc_classe_no_aug = accuracy_score(y_test_classe, y_pred_classe_no_aug)
-    report_classe_no_aug = classification_report(y_test_classe, y_pred_classe_no_aug, zero_division=0, output_dict=True)
-    f1_classe_no_aug = report_classe_no_aug['macro avg']['f1-score']
-    
-    # Show comparison
-    print(f"\n📊 Results Comparison:")
-    print(f"   With Augmentation:    Accuracy={acc_classe_aug:.4f}  F1-macro={f1_classe_aug:.4f}")
-    print(f"   Without Augmentation: Accuracy={acc_classe_no_aug:.4f}  F1-macro={f1_classe_no_aug:.4f}")
-    print(f"\n   Gain:")
-    print(f"      Accuracy: +{(acc_classe_aug - acc_classe_no_aug)*100:.2f}% ({(acc_classe_aug/acc_classe_no_aug - 1)*100:.2f}% relative)")
-    print(f"      F1-macro:  +{f1_classe_aug - f1_classe_no_aug:.4f} ({(f1_classe_aug/f1_classe_no_aug - 1)*100:.2f}% relative)")
-    
-    # Use augmented model for pipeline
-    model_classe = model_classe_aug
-    class_weight_dict_classe = class_weight_dict_aug
     
     # ========================================================================
     # TEST CLASSE MODEL: Using TRUE CATEGORIA (not predicted)
@@ -1511,13 +1419,21 @@ def main():
     
     # Test CLASSE model using TRUE CATEGORIA (not predicted)
     y_test_pred_classe_true_cat = model_classe.predict(X_test_classe)
-    test_report_classe_true_cat = classification_report(y_test_classe, y_test_pred_classe_true_cat, zero_division=0, output_dict=True)
+    test_report_classe_true_cat = classification_report(
+        y_test_classe, y_test_pred_classe_true_cat, 
+        target_names=label_encoders["CLASSE"].classes_,
+        zero_division=0, output_dict=True
+    )
     test_accuracy_classe_true_cat = accuracy_score(y_test_classe, y_test_pred_classe_true_cat)
     
     print(f"✅ CLASSE prediction accuracy (using TRUE CATEGORIA): {test_accuracy_classe_true_cat:.4f} ({test_accuracy_classe_true_cat*100:.2f}%)")
     print(f"   F1-macro: {test_report_classe_true_cat['macro avg']['f1-score']:.4f}")
     print(f"\n=== CLASSE - TEST RESULTS (True CATEGORIA) ===")
-    print(classification_report(y_test_classe, y_test_pred_classe_true_cat, zero_division=0))
+    print(classification_report(
+        y_test_classe, y_test_pred_classe_true_cat, 
+        target_names=label_encoders["CLASSE"].classes_,
+        zero_division=0
+    ))
     
     # Save confusion matrix for CLASSE model (with TRUE CATEGORIA)
     cm_path_classe = os.path.join(DATA_DIR, "confusion_matrix_classe.csv")
@@ -1544,7 +1460,11 @@ def main():
         X_test_cat_clean = X_test_cat_clean.drop(columns=['is_augmented'])
     
     y_test_pred_categoria = model_categoria.predict(X_test_cat_clean)
-    test_report_categoria = classification_report(y_test_cat, y_test_pred_categoria, zero_division=0, output_dict=True)
+    test_report_categoria = classification_report(
+        y_test_cat, y_test_pred_categoria, 
+        target_names=label_encoders["CATEGORIA"].classes_,
+        zero_division=0, output_dict=True
+    )
     test_accuracy_categoria = accuracy_score(y_test_cat, y_test_pred_categoria)
     
     print(f"✅ CATEGORIA prediction accuracy: {test_accuracy_categoria:.4f} ({test_accuracy_categoria*100:.2f}%)")
@@ -1603,6 +1523,7 @@ def main():
         
         test_report_classe = classification_report(
             y_test_classe_predictable, y_test_pred_classe_predictable, 
+            target_names=label_encoders["CLASSE"].classes_,
             zero_division=0, output_dict=True
         )
         test_accuracy_classe = accuracy_score(y_test_classe_predictable, y_test_pred_classe_predictable)
@@ -1649,7 +1570,11 @@ def main():
         print(f"      ⚠️  No samples to evaluate (all are grouped rare categories)")
     
     print(f"\n=== CATEGORIA - TEST RESULTS ===")
-    print(classification_report(y_test_cat, y_test_pred_categoria, zero_division=0))
+    print(classification_report(
+        y_test_cat, y_test_pred_categoria, 
+        target_names=label_encoders["CATEGORIA"].classes_,
+        zero_division=0
+    ))
     
     print(f"\n=== CLASSE - TEST RESULTS (Cascade, using predicted CATEGORIA) ===")
     # Filter out -1 values (not predicted samples) before classification_report
@@ -1657,7 +1582,16 @@ def main():
     if valid_mask.sum() > 0:
         y_test_classe_valid = y_test_classe[valid_mask]
         y_test_pred_classe_valid = y_test_pred_classe[valid_mask]
-        print(classification_report(y_test_classe_valid, y_test_pred_classe_valid, zero_division=0))
+        # Get unique classes present in valid data to show only relevant classes
+        unique_classes = np.unique(np.concatenate([y_test_classe_valid, y_test_pred_classe_valid]))
+        unique_classes = unique_classes[unique_classes >= 0]  # Remove -1 if present
+        target_names_valid = [label_encoders["CLASSE"].classes_[i] for i in unique_classes]
+        print(classification_report(
+            y_test_classe_valid, y_test_pred_classe_valid, 
+            target_names=target_names_valid,
+            labels=unique_classes,
+            zero_division=0
+        ))
     else:
         print("⚠️  No valid samples to evaluate (all are -1)")
     
