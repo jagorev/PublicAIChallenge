@@ -1,0 +1,16 @@
+[general]
+name=Colorazione Classi
+qgisMinimumVersion=3.0
+description=Plugin per colorare particelle in base alle classi predette dal modello AI
+version=1.0
+author=Università di Trento - AI Challenge
+email=
+
+about=Questo plugin riceve una lista di classi catastali predette da un modello AI con relative probabilità e colora le particelle corrispondenti. Le classi con alta probabilità vengono colorate con colori più accesi, quelle con bassa probabilità con colori più sbiaditi.
+
+tracker=
+repository=
+category=Plugins
+icon=icon.png
+experimental=False
+deprecated=False
