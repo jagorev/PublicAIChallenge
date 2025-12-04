@@ -14,6 +14,11 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Optional, Tuple, Any
 
+# FIX per QGIS su macOS: disabilita il multiprocessing che causa errori
+# "Invalid Data Source: from multiprocessing.resource_tracker..."
+os.environ["JOBLIB_START_METHOD"] = "fork"
+os.environ["LOKY_MAX_CPU_COUNT"] = "1"
+
 # SHAP è opzionale - importato solo se disponibile
 try:
     import shap
@@ -62,6 +67,35 @@ class ModelInference:
         self._explainer_categoria = None
         self._explainer_classe = None
         self.last_error = None
+    
+    def _disable_model_parallelism(self, model):
+        """
+        Disabilita il parallelismo (n_jobs) su un modello scikit-learn.
+        
+        Questo è necessario per evitare errori di multiprocessing in QGIS,
+        specialmente su macOS dove lo spawn di nuovi processi Python
+        viene interpretato erroneamente come percorso di file.
+        """
+        # Disabilita n_jobs sul modello principale
+        if hasattr(model, 'n_jobs'):
+            model.n_jobs = 1
+        
+        # Per modelli ensemble (RandomForest, GradientBoosting, etc.)
+        if hasattr(model, 'estimators_'):
+            for estimator in model.estimators_:
+                if hasattr(estimator, 'n_jobs'):
+                    estimator.n_jobs = 1
+        
+        # Per Pipeline scikit-learn
+        if hasattr(model, 'steps'):
+            for name, step in model.steps:
+                self._disable_model_parallelism(step)
+        
+        # Per VotingClassifier, StackingClassifier, etc.
+        if hasattr(model, 'estimators'):
+            for est in model.estimators:
+                if hasattr(est, 'n_jobs'):
+                    est.n_jobs = 1
         
     def load_models(self) -> bool:
         """Carica tutti i modelli e gli encoders dai file pickle."""
@@ -79,6 +113,11 @@ class ModelInference:
             
             with open(self.model_classe_path, "rb") as f:
                 self.model_classe = pickle.load(f)
+            
+            # FIX QGIS/macOS: Disabilita multiprocessing sui modelli per evitare
+            # errori "Invalid Data Source: from multiprocessing.resource_tracker..."
+            self._disable_model_parallelism(self.model_categoria)
+            self._disable_model_parallelism(self.model_classe)
             
             with open(self.label_encoders_path, "rb") as f:
                 self.label_encoders = pickle.load(f)
