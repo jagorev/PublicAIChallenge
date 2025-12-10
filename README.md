@@ -1,4 +1,4 @@
-# AI Catasto Challenge
+# AI Challenge
 
 ## Contesto
 
