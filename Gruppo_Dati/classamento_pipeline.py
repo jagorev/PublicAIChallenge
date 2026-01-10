@@ -1098,7 +1098,12 @@ def main():
         "RENDITA_EURO",
         "CLASSE",
         "sottoclasse",
-        "CONSISTENZA"
+        "CONSISTENZA",
+        'ZONA',
+        'SUPERFICIE',
+        'VALIMIS',
+        'PIANI',
+        'PM'
     ]
     
     exclude_columns_classe = [
@@ -1107,7 +1112,12 @@ def main():
         "sottoCategoriaImmobiliare",
         "RENDITA_EURO",
         "sottoclasse",
-        "CONSISTENZA"
+        "CONSISTENZA",
+        'ZONA',
+        'SUPERFICIE',
+        'VALIMIS',
+        'PIANI',
+        'PM'
         # NOTA: CATEGORIA NON è esclusa perché serve come feature per predire CLASSE
     ]
 
