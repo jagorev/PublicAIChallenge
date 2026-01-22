@@ -6,12 +6,6 @@ from qgis.PyQt.QtWidgets import QMessageBox
 
 def install_dependencies():
     """Controlla e installa le dipendenze mancanti."""
-    path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-    req_file = os.path.join(path, "requirements.txt")
-    
-    if not os.path.exists(req_file):
-        return False
-
     # Lista di pacchetti 'critici' da controllare (nome import : nome pip)
     dependencies = {
         "pandas": "pandas",
@@ -38,7 +32,10 @@ def install_dependencies():
         if res == QMessageBox.Yes:
             try:
                 # Usa --user per evitare problemi di permessi su macOS
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "-r", req_file])
+                # Installa direttamente la lista dei pacchetti mancanti (senza file requirements.txt)
+                cmd = [sys.executable, "-m", "pip", "install", "--user"] + missing
+                subprocess.check_call(cmd)
+                
                 QMessageBox.information(None, "Successo", "Dipendenze installate correttamente.\n\nIMPORTANTE: Devi RIAVVIARE QGIS affinché le modifiche abbiano effetto.")
                 return True 
             except Exception as e:
