@@ -11,15 +11,23 @@ def install_dependencies():
     if not os.path.exists(req_file):
         return
 
-    # Lista di pacchetti 'critici' da controllare (nomi che si usano in import)
-    dependencies = ["pandas", "sklearn", "matplotlib", "reportlab", "shap"]
+    # Lista di pacchetti 'critici' da controllare (nome import : nome pip)
+    dependencies = {
+        "pandas": "pandas",
+        "numpy": "numpy",
+        "sklearn": "scikit-learn",
+        "matplotlib": "matplotlib",
+        "reportlab": "reportlab",
+        "shap": "shap",
+        "joblib": "joblib"
+    }
     missing = []
     
-    for dep in dependencies:
+    for import_name, pip_name in dependencies.items():
         try:
-            __import__(dep)
+            __import__(import_name)
         except ImportError:
-            missing.append(dep)
+            missing.append(pip_name)
 
     if missing:
         from qgis.PyQt.QtWidgets import QMessageBox
