@@ -8,7 +8,7 @@ Pipeline a cascata:
 Il modulo supporta anche la spiegabilità locale tramite SHAP (TreeExplainer).
 """
 
-import os
+import os, sys
 import pickle
 import pandas as pd
 import numpy as np
@@ -16,7 +16,10 @@ from typing import List, Dict, Optional, Tuple, Any
 
 # FIX per QGIS su macOS: disabilita il multiprocessing che causa errori
 # "Invalid Data Source: from multiprocessing.resource_tracker..."
-os.environ["JOBLIB_START_METHOD"] = "fork"
+if sys.platform == "win32":
+    os.environ["JOBLIB_START_METHOD"] = "spawn"
+else:
+    os.environ["JOBLIB_START_METHOD"] = "fork"
 os.environ["LOKY_MAX_CPU_COUNT"] = "1"
 
 # SHAP è opzionale - importato solo se disponibile
