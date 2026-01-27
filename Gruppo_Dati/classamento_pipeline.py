@@ -1,6 +1,5 @@
 """
 Clean Pipeline for Catasto Problem - Training Script
-Extracted from clean_pipeline.ipynb
 """
 
 import pandas as pd
@@ -332,7 +331,7 @@ def load_or_create_xml(xml_folder):
 def clean_dataframe(df_final):
     """Clean the merged dataframe."""
     # Drop columns
-    columns_to_drop = ['TIPOREC_x', 'TIPOREC_y', 'TIPOIMMO_x', 'TIPOIMMO_y', 'source_file', 'SEZ_y']
+    columns_to_drop = ['TIPOREC_x', 'TIPOREC_y', 'TIPOIMMO_x', 'TIPOIMMO_y', 'SEZ_y']#'source_file', 
     columns_to_drop_location = [
         'codiceVia', 'indirizzoIT', 'civico1', 'civico2', 'civico3', 'CIVICO',
         'foglio', 'FOGLIO', 'numeratore', 'PARTICELLA', 'subalterno', 'SUBALTERNO',
@@ -383,7 +382,7 @@ def clean_dataframe(df_final):
     # Filter categories A, B, C
     df_clean = df_clean[df_clean['CATEGORIA'].str.startswith(('A', 'B', 'C'))]
 
-    return df_clean
+    return df_clean, columns_boolean
 
 # ============================================================================
 # STEP 4: Preprocessing for model
@@ -424,6 +423,7 @@ def preprocess_data(df_final_clean, categorical_cols, numeric_cols, list_cols):
         df_model = df_model.drop(columns=list_cols)
 
     # Process numeric columns
+    numeric_medians = {}
     for col in numeric_cols:
         if col in df_model.columns:
             df_model[col] = pd.to_numeric(df_model[col], errors='coerce')
@@ -432,6 +432,8 @@ def preprocess_data(df_final_clean, categorical_cols, numeric_cols, list_cols):
                 df_model[col] = df_model[col].fillna(median_val)
             else:
                 df_model[col] = df_model[col].fillna(0)
+                median_val = 0
+            numeric_medians[col] = median_val  # save the median val
 
     # Process categorical columns
     label_encoders = {}
@@ -442,32 +444,58 @@ def preprocess_data(df_final_clean, categorical_cols, numeric_cols, list_cols):
             df_model[col] = le.fit_transform(df_model[col].astype(str))
             label_encoders[col] = le
 
-    return df_model, label_encoders
+    return df_model, label_encoders, numeric_medians
 
-def load_or_create_model_data(df_final_clean):
+def load_or_create_model_data(df_final_clean, columns_boolean):
     """Load preprocessed model dataframe from CSV or create it."""
     model_path = os.path.join(DATA_DIR, "df_model.csv")
     encoders_path = os.path.join(DATA_DIR, "label_encoders.pkl")
+    medians_path = os.path.join(DATA_DIR, "numeric_medians.pkl")
     
-    if os.path.exists(model_path) and os.path.exists(encoders_path):
+    if os.path.exists(model_path) and os.path.exists(encoders_path) and os.path.exists(medians_path):
         print(f"📂 Loading preprocessed model dataframe from {model_path}...")
         df_model = pd.read_csv(model_path, low_memory=False)
         print(f"📂 Loading label encoders from {encoders_path}...")
         with open(encoders_path, 'rb') as f:
             label_encoders = pickle.load(f)
-        print(f"✅ Loaded {len(df_model)} records and {len(label_encoders)} encoders from CSV/pickle")
-        return df_model, label_encoders
+        print(f"📂 Loading numeric medians from {medians_path}...")
+        with open(medians_path, 'rb') as f:
+            numeric_medians = pickle.load(f)
+        print(f"✅ Loaded {len(df_model)} records, {len(label_encoders)} encoders, and {len(numeric_medians)} medians")
+        return df_model, label_encoders, numeric_medians
     else:
         print(f"📝 Creating preprocessed model dataframe...")
         categorical_cols, numeric_cols, list_cols, other_cols = identify_column_types(df_final_clean)
-        df_model, label_encoders = preprocess_data(df_final_clean, categorical_cols, numeric_cols, list_cols)
+
+        df_model, label_encoders, numeric_medians = preprocess_data(df_final_clean, categorical_cols, numeric_cols, list_cols)
+
+        column_types = {}
+        for col in df_final_clean.columns:
+            if col in columns_boolean:
+                column_types[col] = "boolean"
+            elif col in categorical_cols:
+                column_types[col] = "categorical"
+            elif col in numeric_cols:
+                column_types[col] = "numeric"
+            elif col in list_cols:
+                column_types[col] = "list"
+            else:
+                column_types[col] = "other"
+
+        with open(os.path.join(DATA_DIR, "column_types.pkl"), "wb") as f:
+            pickle.dump(column_types, f)
+        print(f"✅ Saved column types for {len(column_types)} columns")
+
         print(f"💾 Saving preprocessed model dataframe to {model_path}...")
         df_model.to_csv(model_path, index=False)
         print(f"💾 Saving label encoders to {encoders_path}...")
         with open(encoders_path, 'wb') as f:
             pickle.dump(label_encoders, f)
-        print(f"✅ Saved {len(df_model)} records to CSV and {len(label_encoders)} encoders to pickle")
-        return df_model, label_encoders
+        print(f"💾 Saving numeric medians to {medians_path}...")
+        with open(medians_path, 'wb') as f:
+            pickle.dump(numeric_medians, f)
+        print(f"✅ Saved {len(df_model)} records, {len(label_encoders)} encoders, and {len(numeric_medians)} medians")
+        return df_model, label_encoders, numeric_medians
 
 # ============================================================================
 # STEP 5: Prepare data splits and apply augmentation
@@ -1125,7 +1153,6 @@ def main():
     print("\n[1/7] Processing FAB file...")
     flat = load_or_create_flat(fab_file)
     print(f"✅ FAB records: {len(flat)}")
-
     # Step 2: Load or create XML dataframe
     print("\n[2/7] Processing XML files...")
     df_xml = load_or_create_xml(xml_folder)
@@ -1140,13 +1167,14 @@ def main():
         right_on=['COMUNE_CATASTALE', 'FOGLIO', 'PARTICELLA', 'SUBALTERNO'],
         suffixes=('_xml', '_fab')
     )
-    df_final_clean = clean_dataframe(df_final)
+    df_final_clean, columns_boolean = clean_dataframe(df_final)
     print(f"✅ Cleaned records: {len(df_final_clean)}")
 
     # Step 4: Load or create preprocessed model data
     print("\n[4/7] Preprocessing data...")
-    df_model, label_encoders = load_or_create_model_data(df_final_clean)
+    df_model, label_encoders, numeric_medians = load_or_create_model_data(df_final_clean, columns_boolean)
     print(f"✅ Preprocessed: {df_model.shape}")
+    
 
     # Step 4.5: Group rare categories EARLY (before splitting)
     print("\n[4.5/7] Grouping rare categories (early grouping)...")
@@ -1205,6 +1233,8 @@ def main():
     )
 
     print(f"✅ Train: {len(df_train_final)}, Test: {len(df_test)}")
+
+
 
     # Prepare X, y for CATEGORIA prediction
     X_train_cat, y_train_cat = prepare_xy(df_train_final, "CATEGORIA", exclude_columns_categoria)
@@ -1289,14 +1319,10 @@ def main():
     
     # Add CATEGORIA_encoded as feature (CATEGORIA is already encoded in df_model)
     # We need to use the encoded value directly
-    if 'CATEGORIA' in df_train_final_classe.columns:
-        # CATEGORIA is already encoded from preprocessing, use it directly
-        df_train_final_classe['CATEGORIA_encoded'] = df_train_final_classe['CATEGORIA']
-        df_test_classe['CATEGORIA_encoded'] = df_test_classe['CATEGORIA']
-    else:
-        # Fallback: encode if not already encoded
-        df_train_final_classe['CATEGORIA_encoded'] = le_categoria.transform(df_train_final_classe['CATEGORIA'])
-        df_test_classe['CATEGORIA_encoded'] = le_categoria.transform(df_test_classe['CATEGORIA'])
+    if 'CATEGORIA' not in df_train_final_classe.columns:
+        # encode if not already encoded
+        df_train_final_classe['CATEGORIA'] = le_categoria.transform(df_train_final_classe['CATEGORIA'])
+        df_test_classe['CATEGORIA'] = le_categoria.transform(df_test_classe['CATEGORIA'])
     
     # IMPORTANT: Always recreate CLASSE label encoder after split to ensure it matches
     # the actual classes in train/test sets (after grouping). The encoder from preprocessing
@@ -1336,14 +1362,13 @@ def main():
     print(f"   ✅ CLASSE label encoder recreated with {len(le_classe.classes_)} classes (from train only)")
     print(f"   Classes: {list(le_classe.classes_)}")
     
-    # Prepare X, y for CLASSE prediction (CATEGORIA_encoded is included as feature)
+    # Prepare X, y for CLASSE prediction
     X_train_classe, y_train_classe = prepare_xy(df_train_final_classe, "CLASSE", exclude_columns_classe)
     X_test_classe, y_test_classe = prepare_xy(df_test_classe, "CLASSE", exclude_columns_classe)
     
     print(f"\n📊 Dataset sizes (CLASSE):")
     print(f"   Train: {len(X_train_classe)} samples")
     print(f"   Test: {len(X_test_classe)} samples")
-    print(f"   ✅ Features include CATEGORIA_encoded")
     
     # Apply augmentation for CLASSE (balancing CATEGORIA+CLASSE combinations)
     print("\n[6/7] Applying Simple Augmentation for CLASSE (balancing CATEGORIA+CLASSE combinations)...")
@@ -1456,6 +1481,7 @@ def main():
     )
 
 
+
     # ========================================================================
     # CASCADE PIPELINE: Test complete pipeline on test set
     # ========================================================================
@@ -1511,7 +1537,7 @@ def main():
     df_test_cascade = df_test_classe.copy()
     # Replace CATEGORIA_encoded with predicted CATEGORIA (encoded)
     # Note: y_test_pred_categoria is already encoded (numeric)
-    df_test_cascade['CATEGORIA_encoded'] = y_test_pred_categoria
+    df_test_cascade['CATEGORIA'] = y_test_pred_categoria
     
     # Prepare X for CLASSE prediction (with predicted CATEGORIA)
     X_test_classe_cascade, _ = prepare_xy(df_test_cascade, "CLASSE", exclude_columns_classe)
