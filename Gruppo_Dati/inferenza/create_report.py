@@ -81,13 +81,41 @@ def load_shap_long_format(df, k=5):
 
 
 def plot_shap_bar(data, title, filename):
+    """
+    data = [(feature, shap_value, feature_value)]
+    - valori positivi: barre verdi → da sx a dx
+    - valori negativi: barre rosse → da dx a sx
+    """
+
+    if len(data) == 0:
+        print(f"[WARN] Nessun dato per il grafico SHAP: {filename}")
+        return
+
     features = [d[0] for d in data]
     values = [d[1] for d in data]
 
-    plt.figure(figsize=(8,4))
-    plt.barh(features, values)
+    plt.figure(figsize=(8, 4))
+
+    # È un grafico SHAP positivo?
+    is_positive_chart = "positivo" in title.lower() or "positivi" in title.lower()
+
+    if is_positive_chart:
+        # valori positivi, barre verdi da sx a dx
+        bar_colors = ["green"] * len(values)
+        plt.barh(features, values, color=bar_colors)
+    else:
+        # valori negativi → invertiamo il segno per avere barre da dx a sx
+        neg_values = [-abs(v) for v in values]
+        bar_colors = ["red"] * len(values)
+        plt.barh(features, neg_values, color=bar_colors)
+
+    # titolo + griglia
     plt.title(title)
     plt.grid(True, axis='x', linestyle="--", alpha=0.4)
+
+    # forza visualizzazione segni +/–
+    plt.xticks(plt.xticks()[0], [f"{x:+.2f}" for x in plt.xticks()[0]])
+
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
@@ -160,7 +188,7 @@ def generate_report():
         ))
         story.append(Spacer(1,12))
 
-        story.append(Paragraph("SHAP - Fattori Positivi", styles["Heading3"]))
+        story.append(Paragraph("SHAP - Fattori Positivi (+)", styles["Heading3"]))
         story.append(Paragraph(
             "Quanto segue rappresenta i 5 fattori che hanno avvicinato maggiormente "
             "(in accordo con predizione) il modello alla predizione:", 
@@ -168,7 +196,7 @@ def generate_report():
         )
         story.append(Image("./outputs/shap_positive.png", width=14*cm, height=5*cm))
 
-        story.append(Paragraph("SHAP - Fattori Negativi", styles["Heading3"]))
+        story.append(Paragraph("SHAP - Fattori Negativi (-)", styles["Heading3"]))
         story.append(Paragraph(
             "Quanto segue rappresenta i 5 fattori che hanno allontanato il modello dalla predizione:",
             styles["Normal"])

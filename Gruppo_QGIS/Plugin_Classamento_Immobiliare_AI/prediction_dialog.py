@@ -31,7 +31,7 @@ class PredictionDialog(QDialog):
         layout = QVBoxLayout()
         
         # Titolo
-        title = QLabel("<h2>🏠 Predizione Classamento Immobiliare</h2>")
+        title = QLabel("<h2>Predizione Classamento Immobiliare</h2>")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
@@ -73,7 +73,7 @@ class PredictionDialog(QDialog):
             "1a: Verde sgargiante | 2a: Arancione"
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
+        desc.setStyleSheet("padding: 10px; background-color: #333333; border-radius: 5px;")
         tab_pred_layout.addWidget(desc)
         
         # Tabella predizioni
@@ -133,7 +133,7 @@ class PredictionDialog(QDialog):
                 "Le feature positive aumentano la probabilità, quelle negative la diminuiscono."
             )
             shap_desc.setWordWrap(True)
-            shap_desc.setStyleSheet("padding: 10px; background-color: #e3f2fd; border-radius: 5px;")
+            shap_desc.setStyleSheet("padding: 10px; background-color: #333333; border-radius: 5px;")
             tab_shap_layout.addWidget(shap_desc)
             
             # Features positive

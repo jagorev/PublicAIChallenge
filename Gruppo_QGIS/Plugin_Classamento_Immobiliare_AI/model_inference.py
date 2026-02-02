@@ -1,28 +1,21 @@
 """
-Modulo per l'inferenza con i modelli di classificazione immobiliare.
-
-Pipeline a cascata:
-1. Modello CATEGORIA: predice la categoria catastale (A01, A02, B06, C02, ecc.)
-2. Modello CLASSE: predice la classe usando CATEGORIA come feature aggiuntiva
-
-Il modulo supporta anche la spiegabilità locale tramite SHAP (TreeExplainer).
+Modulo per l'inferenza con i modelli di classificazione immobiliare (Versione XML).
 """
 
 import os, sys
 import pickle
 import pandas as pd
 import numpy as np
+import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional, Tuple, Any
 
-# FIX per QGIS su macOS: disabilita il multiprocessing che causa errori
-# "Invalid Data Source: from multiprocessing.resource_tracker..."
+# Configurazione Joblib per evitare crash in QGIS
 if sys.platform == "win32":
     os.environ["JOBLIB_START_METHOD"] = "spawn"
 else:
     os.environ["JOBLIB_START_METHOD"] = "fork"
 os.environ["LOKY_MAX_CPU_COUNT"] = "1"
 
-# SHAP è opzionale - importato solo se disponibile
 try:
     import shap
     SHAP_AVAILABLE = True
@@ -31,31 +24,16 @@ except ImportError:
 
 
 class ModelInference:
-    """
-    Classe per gestire l'inferenza con i modelli di classificazione a cascata.
-    
-    Carica due modelli pickle:
-    - model_categoria.pkl: predice CATEGORIA
-    - model_classe.pkl: predice CLASSE (usando CATEGORIA come feature)
-    
-    E i label encoders:
-    - label_encoders_final.pkl: dizionario con encoders per CATEGORIA e CLASSE
-    """
     
     def __init__(self, model_dir: Optional[str] = None):
-        """
-        Inizializza il modulo di inferenza.
-        
-        Args:
-            model_dir: Cartella contenente i file del modello.
-                       Se None, usa la cartella 'data' nella stessa directory del plugin.
-        """
         self.model_categoria = None
         self.model_classe = None
         self.label_encoders = None
         self.le_categoria = None
         self.le_classe = None
-        self.df_model_reference = None
+        self.column_types = None
+        self.numeric_medians = None
+        self.filtered_column_types = None
         
         if model_dir is None:
             plugin_dir = os.path.dirname(__file__)
@@ -65,417 +43,311 @@ class ModelInference:
         self.model_categoria_path = os.path.join(self.model_dir, "model_categoria.pkl")
         self.model_classe_path = os.path.join(self.model_dir, "model_classe.pkl")
         self.label_encoders_path = os.path.join(self.model_dir, "label_encoders_final.pkl")
-        self.df_model_reference_path = os.path.join(self.model_dir, "df_model.csv")
+        self.numeric_medians_path = os.path.join(self.model_dir, "numeric_medians.pkl")
+        self.column_types_path = os.path.join(self.model_dir, "column_types.pkl")
         
         self._explainer_categoria = None
-        self._explainer_classe = None
-        self.last_error = None
     
     def _disable_model_parallelism(self, model):
-        """
-        Disabilita il parallelismo (n_jobs) su un modello scikit-learn.
-        
-        Questo è necessario per evitare errori di multiprocessing in QGIS,
-        specialmente su macOS dove lo spawn di nuovi processi Python
-        viene interpretato erroneamente come percorso di file.
-        """
-        # Disabilita n_jobs sul modello principale
-        if hasattr(model, 'n_jobs'):
-            model.n_jobs = 1
-        
-        # Per modelli ensemble (RandomForest, GradientBoosting, etc.)
+        """Disabilita il parallelismo interno di sklearn/joblib."""
+        if hasattr(model, 'n_jobs'): model.n_jobs = 1
         if hasattr(model, 'estimators_'):
             for estimator in model.estimators_:
-                if hasattr(estimator, 'n_jobs'):
-                    estimator.n_jobs = 1
-        
-        # Per Pipeline scikit-learn
-        if hasattr(model, 'steps'):
-            for name, step in model.steps:
-                self._disable_model_parallelism(step)
-        
-        # Per VotingClassifier, StackingClassifier, etc.
-        if hasattr(model, 'estimators'):
-            for est in model.estimators:
-                if hasattr(est, 'n_jobs'):
-                    est.n_jobs = 1
+                if hasattr(estimator, 'n_jobs'): estimator.n_jobs = 1
         
     def load_models(self) -> bool:
-        """Carica tutti i modelli e gli encoders dai file pickle."""
+        """Carica tutti i modelli e i file di supporto."""
         try:
-            for path, name in [
-                (self.model_categoria_path, "model_categoria.pkl"),
-                (self.model_classe_path, "model_classe.pkl"),
-                (self.label_encoders_path, "label_encoders_final.pkl"),
-            ]:
-                if not os.path.exists(path):
-                    raise FileNotFoundError(f"File non trovato: {path}")
-            
-            with open(self.model_categoria_path, "rb") as f:
+            with open(self.model_categoria_path, "rb") as f: 
                 self.model_categoria = pickle.load(f)
-            
-            with open(self.model_classe_path, "rb") as f:
-                self.model_classe = pickle.load(f)
-            
-            # FIX QGIS/macOS: Disabilita multiprocessing sui modelli per evitare
-            # errori "Invalid Data Source: from multiprocessing.resource_tracker..."
             self._disable_model_parallelism(self.model_categoria)
+            
+            with open(self.model_classe_path, "rb") as f: 
+                self.model_classe = pickle.load(f)
             self._disable_model_parallelism(self.model_classe)
             
-            with open(self.label_encoders_path, "rb") as f:
+            with open(self.label_encoders_path, "rb") as f: 
                 self.label_encoders = pickle.load(f)
-            
             self.le_categoria = self.label_encoders.get("CATEGORIA")
             self.le_classe = self.label_encoders.get("CLASSE")
+
+            with open(self.numeric_medians_path, "rb") as f: 
+                self.numeric_medians = pickle.load(f)
             
-            if self.le_categoria is None or self.le_classe is None:
-                raise ValueError("Label encoders per CATEGORIA o CLASSE non trovati")
-            
-            if os.path.exists(self.df_model_reference_path):
-                self.df_model_reference = pd.read_csv(self.df_model_reference_path, low_memory=False)
-            
+            with open(self.column_types_path, "rb") as f: 
+                self.column_types = pickle.load(f)
+
+            # Filtra i tipi di colonna in base alle feature richieste dal modello Categoria
+            required_features = set(self.model_categoria.feature_names_in_)
+            self.filtered_column_types = {
+                col: typ for col, typ in self.column_types.items() 
+                if col in required_features
+            }
             return True
-            
         except Exception as e:
-            self.last_error = str(e)
             return False
     
     def _ensure_models_loaded(self):
-        """Assicura che i modelli siano caricati."""
-        if self.model_categoria is None or self.model_classe is None:
-            if not self.load_models():
-                raise RuntimeError(f"Impossibile caricare i modelli: {self.last_error}")
-    
-    def preprocess_input(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Preprocessa i dati di input per renderli compatibili con i modelli."""
-        self._ensure_models_loaded()
-        df_processed = data.copy()
-        expected_features_cat = self.model_categoria.feature_names_in_
-        
-        for col in expected_features_cat:
-            if col not in df_processed.columns:
-                if self.df_model_reference is not None and col in self.df_model_reference.columns:
-                    if pd.api.types.is_numeric_dtype(self.df_model_reference[col]):
-                        df_processed[col] = self.df_model_reference[col].median()
-                    else:
-                        mode_val = self.df_model_reference[col].mode()
-                        df_processed[col] = mode_val[0] if len(mode_val) > 0 else 0
-                else:
-                    df_processed[col] = 0
-        
-        for col in expected_features_cat:
-            if self.df_model_reference is not None and col in self.df_model_reference.columns:
-                if pd.api.types.is_numeric_dtype(self.df_model_reference[col]):
-                    df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
-                    df_processed[col] = df_processed[col].fillna(self.df_model_reference[col].median())
-        
-        for col, le in self.label_encoders.items():
-            if col in expected_features_cat and col not in ['CATEGORIA', 'CLASSE']:
-                if col in df_processed.columns:
-                    most_frequent = le.classes_[0]
-                    df_processed[col] = df_processed[col].fillna(most_frequent).astype(str)
-                    df_processed[col] = df_processed[col].apply(
-                        lambda x: x if x in le.classes_ else most_frequent
-                    )
-                    df_processed[col] = le.transform(df_processed[col])
-        
-        return df_processed
-    
-    def predict_categoria(self, data: pd.DataFrame, preprocessed: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Predice la CATEGORIA per i dati forniti."""
-        self._ensure_models_loaded()
-        if not preprocessed:
-            data = self.preprocess_input(data)
-        
-        expected_features = self.model_categoria.feature_names_in_
-        X = data[expected_features]
-        
-        pred_encoded = self.model_categoria.predict(X).astype(int)
-        pred_decoded = self.le_categoria.inverse_transform(pred_encoded)
-        proba = self.model_categoria.predict_proba(X)
-        
-        return pred_encoded, pred_decoded, proba
-    
-    def predict_classe(self, data: pd.DataFrame, categoria_encoded: np.ndarray, preprocessed: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Predice la CLASSE per i dati forniti, usando CATEGORIA come feature."""
-        self._ensure_models_loaded()
-        if not preprocessed:
-            data = self.preprocess_input(data)
-        
-        df_with_cat = data.copy()
-        df_with_cat['CATEGORIA_encoded'] = categoria_encoded
-        
-        expected_features = self.model_classe.feature_names_in_
-        for col in expected_features:
-            if col not in df_with_cat.columns:
-                if self.df_model_reference is not None and col in self.df_model_reference.columns:
-                    if pd.api.types.is_numeric_dtype(self.df_model_reference[col]):
-                        df_with_cat[col] = self.df_model_reference[col].median()
-                    else:
-                        mode_val = self.df_model_reference[col].mode()
-                        df_with_cat[col] = mode_val[0] if len(mode_val) > 0 else 0
-                else:
-                    df_with_cat[col] = 0
-        
-        X = df_with_cat[expected_features]
-        
-        pred_encoded = self.model_classe.predict(X).astype(int)
-        pred_decoded = self.le_classe.inverse_transform(pred_encoded)
-        proba = self.model_classe.predict_proba(X)
-        
-        return pred_encoded, pred_decoded, proba
-    
-    def predict(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """Esegue la pipeline completa di predizione (CATEGORIA -> CLASSE)."""
-        self._ensure_models_loaded()
-        df_processed = self.preprocess_input(data)
-        
-        cat_encoded, cat_decoded, cat_proba = self.predict_categoria(df_processed, preprocessed=True)
-        classe_encoded, classe_decoded, classe_proba = self.predict_classe(
-            df_processed, cat_encoded, preprocessed=True
-        )
-        
-        idx = 0
-        cat_all_proba = {
-            self.le_categoria.classes_[i]: float(cat_proba[idx][i])
-            for i in range(len(self.le_categoria.classes_))
-        }
-        classe_all_proba = {
-            self.le_classe.classes_[i]: float(classe_proba[idx][i])
-            for i in range(len(self.le_classe.classes_))
-        }
-        
-        return {
-            'categoria': cat_decoded[idx],
-            'categoria_encoded': int(cat_encoded[idx]),
-            'categoria_proba': float(cat_proba[idx][cat_encoded[idx]]),
-            'categoria_all_proba': cat_all_proba,
-            'classe': str(classe_decoded[idx]),
-            'classe_encoded': int(classe_encoded[idx]),
-            'classe_proba': float(classe_proba[idx][classe_encoded[idx]]),
-            'classe_all_proba': classe_all_proba,
-            'final_prediction': f"{cat_decoded[idx]}/{classe_decoded[idx]}"
-        }
-    
-    def get_top_predictions(self, data: pd.DataFrame, top_n: int = 2) -> Dict[str, List[Dict[str, Any]]]:
-        """Restituisce le top N predizioni ordinate per probabilità."""
-        result = self.predict(data)
-        
-        cat_sorted = sorted(
-            result['categoria_all_proba'].items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:top_n]
-        
-        classe_sorted = sorted(
-            result['classe_all_proba'].items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:top_n]
-        
-        return {
-            'categoria': [{'nome': nome, 'probabilita': prob} for nome, prob in cat_sorted],
-            'classe': [{'nome': str(nome), 'probabilita': prob} for nome, prob in classe_sorted],
-            'final_prediction': result['final_prediction']
-        }
-    
-    def get_single_prediction(self, data: pd.DataFrame, top_n: int = 2) -> List[Dict[str, Any]]:
-        """
-        Metodo di compatibilità con il vecchio plugin.
-        Restituisce le predizioni nel formato atteso dal dialog esistente.
-        """
-        top_preds = self.get_top_predictions(data, top_n)
-        
-        results = []
-        for i in range(min(top_n, len(top_preds['categoria']))):
-            cat_pred = top_preds['categoria'][i] if i < len(top_preds['categoria']) else {'nome': 'N/A', 'probabilita': 0}
-            classe_pred = top_preds['classe'][i] if i < len(top_preds['classe']) else {'nome': 'N/A', 'probabilita': 0}
+        if self.model_categoria is None: 
+            self.load_models()
+
+    def parse_xml_input(self, xml_file: str) -> pd.DataFrame:
+        """Parsing identico al codice di riferimento."""
+        try:
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
+            filename = os.path.basename(xml_file)
+
+            elenco_ui = root.find('.//ElencoUI')
+            if elenco_ui is None: 
+                return pd.DataFrame()
+
+            all_rows = []
+            ui_elements = elenco_ui.findall('.//UICostituzione')
+
+            for ui in ui_elements:
+                row = {"source_file": filename}
+                
+                # Identificativo Catastale PM
+                idpm = ui.find('.//ElencoIdentificativiCatastaliPM/IdentificativoCatastalePM')
+                if idpm is not None:
+                    row.update(idpm.attrib)
+
+                # Classamento
+                classamento = ui.find('.//Classamento')
+                if classamento is not None:
+                    row.update(classamento.attrib)
+
+                # Indirizzo
+                indir = ui.find('.//ElencoIndirizzi/Indirizzo')
+                if indir is not None:
+                    row.update(indir.attrib)
+
+                # Piani
+                piani = ui.findall('.//ElencoPiani/Piano')
+                row["lista_piani"] = ";".join([p.attrib.get("numeroPiano", "") for p in piani])
+
+                # Mod1N-2 (iterazione ricorsiva come da riferimento)
+                mod1n2 = ui.find('.//Mod1N-2')
+                if mod1n2 is not None:
+                    row.update(mod1n2.attrib)
+                    for elem in mod1n2.iter():
+                        if elem is not mod1n2:
+                            row.update(elem.attrib)
+                
+                all_rows.append(row)
             
-            results.append({
-                "categoria": cat_pred['nome'],
-                "classe": classe_pred['nome'],
-                "probabilita_cat": cat_pred['probabilita'],
-                "probabilita_classe": classe_pred['probabilita'],
-                "probabilita": cat_pred['probabilita']
+            df_xml = pd.DataFrame(all_rows)
+            
+            # Post-processing interi
+            int_cols = ['comuneCatastale', 'foglio', 'numeratore', 'subalterno']
+            for col in int_cols:
+                if col in df_xml.columns:
+                    try: 
+                        df_xml[col] = df_xml[col].astype(str).str.extract(r"(\d+)", expand=False).astype(float)
+                    except: 
+                        pass
+            return df_xml
+
+        except Exception as e:
+            # Per debug in QGIS meglio non stampare su console ma ritornare vuoto o loggare
+            return pd.DataFrame()
+
+    def clean_dataframe(self, df_final: pd.DataFrame) -> pd.DataFrame:
+        """Rimuove colonne non necessarie."""
+        columns_to_drop = [
+            'source_file', 'codiceVia', 'indirizzoIT', 'civico1', 'civico2',
+            'civico3', 'foglio', 'numeratore', 'subalterno','comuneCatastale',
+            'estAltroDescrizione', 'intAltroDescrizione', 'altroDescrizione',
+            'pavimentazioneAltroDescrizione', 'categoriaImmobiliare',
+            'sottoCategoriaImmobiliare'
+        ]
+
+        return df_final.drop(columns=columns_to_drop, errors='ignore')
+
+    def prepare_row(self, df_xml: pd.DataFrame) -> pd.DataFrame:
+        """Prepara una singola riga seguendo la logica del training."""
+        self._ensure_models_loaded()
+        if df_xml.empty: return pd.DataFrame()
+        
+        df_prepared = pd.DataFrame(index=[0])
+        
+        for col, col_type in self.filtered_column_types.items():
+            if col in df_xml.columns:
+                if col_type == "boolean":
+                    df_prepared[col] = [1]
+                elif col_type == "categorical":
+                    le = self.label_encoders.get(col)
+                    val = df_xml[col].iloc[0]
+                    # Gestione valori mancanti o stringhe
+                    val_str = "MISSING" if pd.isna(val) else str(val)
+                    
+                    if le and val_str in le.classes_:
+                        df_prepared[col] = [le.transform([val_str])[0]]
+                    else:
+                        # Fallback a "MISSING" se esiste nel LE
+                        try:
+                            df_prepared[col] = [le.transform(["MISSING"])[0]]
+                        except:
+                            df_prepared[col] = [0]
+                else: # Numeric
+                    val = df_xml[col].iloc[0]
+                    try:
+                        df_prepared[col] = [float(val)]
+                    except:
+                        # Se fallback, usa la mediana
+                        df_prepared[col] = [float(self.numeric_medians.get(col, 0))]
+            else:
+                # Colonna mancante nel DataFrame XML
+                if col_type == "boolean":
+                    df_prepared[col] = [0]
+                elif col_type == "numeric":
+                    df_prepared[col] = [self.numeric_medians.get(col, 0)]
+                else: # Categorical missing
+                    le = self.label_encoders.get(col)
+                    if le is not None:
+                        try:
+                            df_prepared[col] = [le.transform(["MISSING"])[0]]
+                        except:
+                            df_prepared[col] = [0]
+                    else:
+                        df_prepared[col] = [0]
+                        
+        return df_prepared
+
+    def _run_prediction_pipeline(self, df_p: pd.DataFrame) -> Dict[str, Any]:
+        """Esegue predizione Categoria -> Classe."""
+        # 1. Categoria
+        X_cat = df_p[self.model_categoria.feature_names_in_]
+        p_cat = self.model_categoria.predict(X_cat).astype(int)[0]
+        prob_cat = self.model_categoria.predict_proba(X_cat)[0]
+        cat_dec = self.le_categoria.inverse_transform([p_cat])[0]
+        
+        # 2. Classe
+        df_cl = df_p.copy()
+        df_cl['CATEGORIA'] = p_cat
+        
+        # Prepara X_classe assicurando tutte le feature
+        X_cl = pd.DataFrame(index=[0])
+        for col in self.model_classe.feature_names_in_:
+            if col in df_cl.columns:
+                X_cl[col] = df_cl[col]
+            elif col in self.numeric_medians:
+                X_cl[col] = self.numeric_medians[col]
+            else:
+                X_cl[col] = 0
+            
+        p_cl = self.model_classe.predict(X_cl).astype(int)[0]
+        prob_cl = self.model_classe.predict_proba(X_cl)[0]
+        cl_dec = self.le_classe.inverse_transform([p_cl])[0]
+
+        return {
+            'categoria': cat_dec,
+            'categoria_encoded': int(p_cat),
+            'categoria_proba': float(prob_cat[p_cat]),
+            'categoria_all_proba': dict(zip(self.le_categoria.classes_, prob_cat)),
+            'classe': str(cl_dec),
+            'classe_encoded': int(p_cl),
+            'classe_proba': float(prob_cl[p_cl]),
+            'classe_all_proba': dict(zip(self.le_classe.classes_, prob_cl)),
+            'final_prediction': f"{cat_dec}/{cl_dec}"
+        }
+
+    def run_full_analysis(self, xml_path: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Orchestratore principale chiamato dalla GUI."""
+        self._ensure_models_loaded()
+        
+        # 1. Pipeline
+        df_raw = self.parse_xml_input(xml_path)
+        if df_raw.empty: 
+            return {"error": "XML vuoto o non valido"}
+        
+        df_clean = self.clean_dataframe(df_raw)
+        df_proc = self.prepare_row(df_clean)
+        
+        if df_proc.empty or df_proc.isnull().values.any():
+              # Fallback di sicurezza se prepare_row ha problemi
+             pass
+
+        pred_res = self._run_prediction_pipeline(df_proc)
+        
+        # 2. SHAP
+        shap_data = self.compute_shap_explanation(df_proc)
+        if shap_data: 
+            shap_data['predicted_class'] = pred_res['categoria']
+        
+        # 3. Formattazione GUI (Top N)
+        sorted_cat = sorted(pred_res['categoria_all_proba'].items(), key=lambda x:x[1], reverse=True)
+        sorted_cls = sorted(pred_res['classe_all_proba'].items(), key=lambda x:x[1], reverse=True)
+        
+        formatted_preds = []
+        for i in range(min(5, len(sorted_cat))):
+            formatted_preds.append({
+                "categoria": sorted_cat[i][0],
+                "probabilita_cat": sorted_cat[i][1],
+                "classe": sorted_cls[i][0] if i < len(sorted_cls) else "N/A",
+                "probabilita_classe": sorted_cls[i][1] if i < len(sorted_cls) else 0.0,
+                "final_prediction": pred_res['final_prediction']
             })
-        
-        return results
-    
-    def compute_shap_explanation(self, data: pd.DataFrame, target: str = 'categoria') -> Optional[Dict[str, Any]]:
-        """Calcola la spiegazione SHAP per la predizione."""
-        if not SHAP_AVAILABLE:
-            return None
-        
-        self._ensure_models_loaded()
-        df_processed = self.preprocess_input(data)
-        
-        if target == 'categoria':
-            model = self.model_categoria
-            X = df_processed[model.feature_names_in_]
-            pred_encoded, pred_decoded, _ = self.predict_categoria(df_processed, preprocessed=True)
             
-            if self._explainer_categoria is None:
-                self._explainer_categoria = shap.TreeExplainer(model)
-            explainer = self._explainer_categoria
+        # 4. Salvataggio CSV (Bridge per report_generator)
+        if output_dir:
+            self.save_inference_results(pred_res, shap_data, output_dir, sorted_cat, sorted_cls)
             
-        elif target == 'classe':
-            model = self.model_classe
-            cat_encoded, _, _ = self.predict_categoria(df_processed, preprocessed=True)
-            df_processed['CATEGORIA_encoded'] = cat_encoded
-            
-            X = df_processed[model.feature_names_in_]
-            pred_encoded, pred_decoded, _ = self.predict_classe(df_processed, cat_encoded, preprocessed=True)
-            
-            if self._explainer_classe is None:
-                self._explainer_classe = shap.TreeExplainer(model)
-            explainer = self._explainer_classe
-        else:
-            raise ValueError(f"target deve essere 'categoria' o 'classe'")
-        
-        shap_values = explainer.shap_values(X)
-        pred_idx = int(pred_encoded[0])
-        
-        if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-            shap_values_pred = shap_values[0, :, pred_idx]
-            base_value = explainer.expected_value[pred_idx]
-        elif isinstance(shap_values, list):
-            shap_values_pred = shap_values[pred_idx][0]
-            base_value = explainer.expected_value[pred_idx]
-        else:
-            shap_values_pred = shap_values[0]
-            base_value = explainer.expected_value if not hasattr(explainer.expected_value, '__len__') else explainer.expected_value[0]
-        
-        feature_names = list(X.columns)
-        feature_values = X.iloc[0].values
-        
-        shap_df = pd.DataFrame({
-            'feature': feature_names,
-            'shap_value': shap_values_pred,
-            'feature_value': feature_values,
-            'abs_shap': np.abs(shap_values_pred)
-        })
-        
-        top_positive = shap_df[shap_df['shap_value'] > 0].nlargest(10, 'shap_value')
-        top_negative = shap_df[shap_df['shap_value'] < 0].nsmallest(10, 'shap_value')
-        
         return {
-            'features': feature_names,
-            'shap_values': shap_values_pred.tolist(),
-            'feature_values': feature_values.tolist(),
-            'base_value': float(base_value),
-            'predicted_class': pred_decoded[0],
-            'top_positive': top_positive.to_dict('records'),
-            'top_negative': top_negative.to_dict('records'),
-            'top_30': shap_df.nlargest(30, 'abs_shap').to_dict('records')
+            "predizioni": formatted_preds,
+            "shap_data": shap_data
         }
-    
-    def get_available_categories(self) -> List[str]:
-        """Restituisce la lista di tutte le categorie disponibili."""
-        self._ensure_models_loaded()
-        return list(self.le_categoria.classes_)
-    
-    def get_available_classes(self) -> List[str]:
-        """Restituisce la lista di tutte le classi disponibili."""
-        self._ensure_models_loaded()
-        return [str(c) for c in self.le_classe.classes_]
-    
-    def get_expected_features_categoria(self) -> List[str]:
-        """Restituisce le feature attese dal modello CATEGORIA."""
-        self._ensure_models_loaded()
-        return list(self.model_categoria.feature_names_in_)
-    
-    def get_expected_features_classe(self) -> List[str]:
-        """Restituisce le feature attese dal modello CLASSE."""
-        self._ensure_models_loaded()
-        return list(self.model_classe.feature_names_in_)
-    
-    @staticmethod
-    def load_sample_input(csv_path: str) -> pd.DataFrame:
-        """Carica un file CSV con i dati dell'immobile."""
-        return pd.read_csv(csv_path)
-    
-    def save_inference_results(self, data: pd.DataFrame, output_dir: str, top_n: int = 3) -> Dict[str, str]:
-        """
-        Salva i risultati dell'inferenza in file CSV per la generazione del report.
-        
-        Args:
-            data: DataFrame con i dati dell'immobile
-            output_dir: Cartella dove salvare i risultati
-            top_n: Numero di predizioni top da salvare
-            
-        Returns:
-            Dizionario con i path dei file salvati
-        """
-        import os
-        
-        # Crea la cartella se non esiste
+
+    def save_inference_results(self, pred_dict, shap_data, output_dir, sorted_cat, sorted_cls):
+        """Salva i CSV per report_generator."""
         os.makedirs(output_dir, exist_ok=True)
         
-        self._ensure_models_loaded()
-        df_processed = self.preprocess_input(data)
+        row = {'final_prediction': pred_dict['final_prediction']}
+        # Salva top 3 per coerenza col reference code
+        for i in range(3):
+            if i < len(sorted_cat):
+                row[f'CATEGORIA_top{i+1}'] = sorted_cat[i][0]
+                row[f'CATEGORIA_top{i+1}_conf'] = sorted_cat[i][1]
+            if i < len(sorted_cls):
+                row[f'CLASSE_top{i+1}'] = sorted_cls[i][0]
+                row[f'CLASSE_top{i+1}_conf'] = sorted_cls[i][1]
+                
+        pd.DataFrame([row]).to_csv(os.path.join(output_dir, "predictions_output.csv"), index=False)
         
-        # Predizioni CATEGORIA
-        cat_encoded, cat_decoded, cat_proba = self.predict_categoria(df_processed, preprocessed=True)
+        if shap_data:
+            pd.DataFrame(shap_data['top_positive']).to_csv(os.path.join(output_dir, "shap_top10_positive.csv"), index=False)
+            pd.DataFrame(shap_data['top_negative']).to_csv(os.path.join(output_dir, "shap_top10_negative.csv"), index=False) 
+            pd.DataFrame(shap_data['top_30']).to_csv(os.path.join(output_dir, "shap_top30_features.csv"), index=False)
+
+    def compute_shap_explanation(self, df_processed: pd.DataFrame) -> Optional[Dict[str, Any]]:
+        """Calcolo SHAP (Feature Importance locale)."""
+        if not SHAP_AVAILABLE: return None
+        model = self.model_categoria
+        X = df_processed[model.feature_names_in_]
         
-        # Predizioni CLASSE
-        classe_encoded, classe_decoded, classe_proba = self.predict_classe(
-            df_processed, cat_encoded, preprocessed=True
-        )
+        if self._explainer_categoria is None: 
+            self._explainer_categoria = shap.TreeExplainer(model)
         
-        # Top N per CATEGORIA e CLASSE
-        top_cat_indices = np.argsort(cat_proba[0])[-top_n:][::-1]
-        top_classe_indices = np.argsort(classe_proba[0])[-top_n:][::-1]
+        pred = model.predict(X).astype(int)[0]
+        vals = self._explainer_categoria.shap_values(X)
         
-        # Crea DataFrame predizioni
-        pred_data = {
-            'final_prediction': [f"{cat_decoded[0]}/{classe_decoded[0]}"],
-        }
-        
-        for i in range(top_n):
-            pred_data[f'CATEGORIA_top{i+1}'] = [self.le_categoria.classes_[top_cat_indices[i]]]
-            pred_data[f'CATEGORIA_top{i+1}_conf'] = [float(cat_proba[0][top_cat_indices[i]])]
-        
-        for i in range(top_n):
-            pred_data[f'CLASSE_top{i+1}'] = [str(self.le_classe.classes_[top_classe_indices[i]])]
-            pred_data[f'CLASSE_top{i+1}_conf'] = [float(classe_proba[0][top_classe_indices[i]])]
-        
-        risultato = pd.DataFrame(pred_data)
-        predictions_path = os.path.join(output_dir, "predictions_output.csv")
-        risultato.to_csv(predictions_path, index=False)
-        
-        # Salva analisi SHAP se disponibile
-        shap_paths = {}
-        shap_explanation = self.compute_shap_explanation(data, target='categoria')
-        
-        if shap_explanation:
-            # Top 30 features
-            shap_top30 = pd.DataFrame(shap_explanation['top_30'])
-            shap_top30_path = os.path.join(output_dir, "shap_top30_features.csv")
-            shap_top30.to_csv(shap_top30_path, index=False)
-            shap_paths['shap_top30'] = shap_top30_path
+        # Gestione differenze formato output SHAP (lista vs array)
+        if isinstance(vals, list): 
+            target_vals = vals[pred][0]
+        elif isinstance(vals, np.ndarray) and vals.ndim == 3: 
+            target_vals = vals[0, :, pred]
+        else: 
+            target_vals = vals[0]
             
-            # Top 10 positive
-            shap_positive = pd.DataFrame(shap_explanation['top_positive'])
-            shap_pos_path = os.path.join(output_dir, "shap_top10_positive.csv")
-            shap_positive.to_csv(shap_pos_path, index=False)
-            shap_paths['shap_positive'] = shap_pos_path
-            
-            # Top 10 negative
-            shap_negative = pd.DataFrame(shap_explanation['top_negative'])
-            shap_neg_path = os.path.join(output_dir, "shap_top10_negative.csv")
-            shap_negative.to_csv(shap_neg_path, index=False)
-            shap_paths['shap_negative'] = shap_neg_path
+        sdf = pd.DataFrame({
+            'feature': X.columns, 
+            'shap_value': target_vals, 
+            'feature_value': X.iloc[0].values
+        })
         
         return {
-            'predictions': predictions_path,
-            'output_dir': output_dir,
-            **shap_paths
+            'top_positive': sdf[sdf.shap_value > 0].nlargest(10, 'shap_value').to_dict('records'),
+            'top_negative': sdf[sdf.shap_value < 0].nsmallest(10, 'shap_value').to_dict('records'),
+            'top_30': sdf.assign(abs_v=sdf.shap_value.abs()).nlargest(30, 'abs_v').to_dict('records')
         }
-
-
-def run_inference(csv_path: str, model_dir: Optional[str] = None, top_n: int = 2) -> List[Dict[str, Any]]:
-    """Funzione di convenienza per eseguire l'inferenza da un file CSV."""
-    inference = ModelInference(model_dir=model_dir)
-    data = pd.read_csv(csv_path)
-    return inference.get_single_prediction(data, top_n)
-
