@@ -138,9 +138,9 @@ Then follow the notebooks in `Gruppo_Dati/notebooks_elaborazione_dati` or run `c
 | Kuba Di Quattro | [@KubaD4](https://github.com/KubaD4) |
 | Decebal Cernei | [@decebalcernei](https://github.com/decebalcernei) |
 | Jago Revrenna | [@jagorev](https://github.com/jagorev) |
-| Michele Minniti | n/a |
+| Michele Minniti | [@Sminnitex](https://github.com/Sminnitex) |
 | Francesco Datres | n/a |
-| Guillermo Torrealba | n/a |
+| Guillermo Torrealba | [@gatorrealbaespinola-debug](https://github.com/gatorrealbaespinola-debug) |
 
 The team worked in two groups: a data group (model, pipeline, inference) and a QGIS group (plugin and integration).
 
